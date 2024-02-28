@@ -1,0 +1,120 @@
+"""
+Saravut Ashametra EN 1000132070
+Assignment#1
+Module 2 A201
+
+OPCUA Server Simulator Program
+
+simulates an opcua server using asyncua library. 
+
+The simulator works as follows.
+- creates a virtual PLC object (e.g. virtualPLC1) in a OPCUA server namespace.
+- add variables to the virtual PLC object. 
+  The variable names and types are determined automatically from the input sensor file.
+- iteratively, fetch a sensor reading from the input sensor file and write the sensor values to 
+  all variables of the virtual PLC object.
+
+Note:
+The sensor.csv dataset was downloaded from:
+https://www.kaggle.com/datasets/nphantawee/pump-sensor-data/data
+
+Author: AnnKDS (kulwadee.so@ku.th)
+"""
+import sys
+import asyncio
+import logging
+import pandas as pd
+from pandas.api.types import is_numeric_dtype
+
+from asyncua import Server as UaServer, ua
+from asyncua.common.methods import uamethod
+
+
+ENDPOINT  = "opc.tcp://127.0.0.1:4840/upskills/server"
+NAMESPACE = "http://g-set.co"
+DELAY = 1  # sleep time between each sensor read
+VARNAME_FILE = "opcua-variables.csv"
+OBJECT_NAME = 'virtualPLC1'
+
+async def main(sensors_data, sensors_col, object_name=OBJECT_NAME):
+
+    _logger = logging.getLogger(__name__)
+
+    # Init the UaServer
+    server = UaServer()
+    await server.init()
+    server.set_endpoint(ENDPOINT)
+    server.set_server_name("Upskills_OPC-UA Test Server")
+    
+    uri = NAMESPACE
+    idx = await server.register_namespace(uri)
+
+    # populating our address space
+    initial_num = 0.0
+    initial_str = ""
+    obj_vplc = await server.nodes.objects.add_object(idx, object_name)
+
+    # initialize variables
+    var_vplcs = []
+    for i in range(len(sensors_col)):
+        #var_name = f"sensor_{str(i).zfill(2)}"
+        var_name = sensors_col[i]
+        if is_numeric_dtype(sensors_data[sensors_col[i]]):
+            initial_val = initial_num
+        else:
+            initial_val = initial_str
+            
+        var_vplc = await obj_vplc.add_variable(idx, var_name, initial_val)
+        var_vplcs.append(var_vplc)
+
+    print("List of virtualPLC1 variables:") 
+    for v in var_vplcs:
+        await v.set_writable()
+        name = await v.read_browse_name()
+        ntype = await v.read_data_type_as_variant_type()
+        print(name.Name, v, ntype)
+
+    _logger.warning(f"Starting OPC Server Simulator at: {ENDPOINT}")
+    async with server:
+        while True:
+            for i in range(len(sensors_data)):
+                print(f"{ENDPOINT}: {sensors_data.iloc[i, 0]}")               
+                
+                for j in range(len(sensors_col)):
+                    col_value = sensors_data.iloc[i, j]                    
+                    if is_numeric_dtype(sensors_data.iloc[:, j]):                        
+                        sensor_value = float(col_value)
+                    else:
+                        sensor_value = str(col_value)
+                    
+                    await var_vplcs[j].write_value(sensor_value)
+        
+                await asyncio.sleep(DELAY)
+
+
+if __name__=="__main__":
+    logging.basicConfig(level=logging.WARNING)
+    arguments = sys.argv[1:]
+
+    if len(arguments) != 2:
+        print(f'Please secify the dataset file name.')
+        print(f'Usage: opc_ua_server2.py -i <datasetfile>')
+        sys.exit()
+    
+    option = arguments[0]
+    filename = arguments[1]
+    
+    if option == '-i':
+
+        if filename == 'datasets/sensor.csv':
+            sensors = pd.read_csv(filename)
+            sensors_col = sensors.columns
+            sensors.dtypes.to_csv(VARNAME_FILE)
+            asyncio.run(main(sensors, sensors_col))
+        else:
+            print(f'FileNotFoundError: {filename} does not exist')
+            sys.exit()
+    
+    else:
+        print('ERROR: option not available!')
+        sys.exit()
